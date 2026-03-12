@@ -138,13 +138,13 @@ function getFirebaseErrorMessage(error: any): string {
 type Theme = 'light' | 'dark';
 
 const NAV_LINKS = [
-  { name: 'Home', path: '#/' },
-  { name: 'About', path: '#/about' },
-  { name: 'Articles', path: '#/articles' },
-  { name: 'Media Library', path: '#/media' },
-  { name: 'Contact', path: '#/contact' },
-  { name: 'Dashboard', path: '#/dashboard' },
-  { name: 'Donate', path: '#/donate' },
+  { name: 'Home', path: '/' },
+  { name: 'About', path: '/about' },
+  { name: 'Articles', path: '/articles' },
+  { name: 'Media Library', path: '/media' },
+  { name: 'Contact', path: '/contact' },
+  { name: 'Dashboard', path: '/dashboard' },
+  { name: 'Donate', path: '/donate' },
 ];
 
 const ANIMATIONS = [
@@ -979,7 +979,7 @@ const templates = {
 
           <p class="mt-10 text-center text-sm text-gray-500">
             Already have an account? 
-            <a href="/login" class="nav-link text-orange-500 font-bold hover:underline" data-path="/login">Sign In</a>
+            <a href="#/login" class="nav-link text-orange-500 font-bold hover:underline" data-path="/login">Sign In</a>
           </p>
         </div>
       </div>
@@ -1014,7 +1014,7 @@ const templates = {
 
           <p class="mt-10 text-center text-sm text-gray-500">
             Remember your password? 
-            <a href="/login" class="nav-link text-orange-500 font-bold hover:underline" data-path="/login">Sign In</a>
+            <a href="#/login" class="nav-link text-orange-500 font-bold hover:underline" data-path="/login">Sign In</a>
           </p>
         </div>
       </div>
@@ -2004,7 +2004,7 @@ function init() {
   }
 
   const linksHtml = NAV_LINKS.map(link => `
-    <a href="${link.path}" class="nav-link desktop-link text-sm font-medium transition-colors hover:text-orange-500 text-gray-600 dark:text-gray-300" data-path="${link.path}">
+    <a href="#${link.path}" class="nav-link desktop-link text-sm font-medium transition-colors hover:text-orange-500 text-gray-600 dark:text-gray-300" data-path="${link.path}">
       ${link.name}
     </a>
   `).join('');
@@ -2013,7 +2013,7 @@ function init() {
   renderMobileMenu();
 
   const footerLinksHtml = NAV_LINKS.map(link => `
-    <li><a href="${link.path}" class="nav-link hover:text-orange-500 transition-colors" data-path="${link.path}">${link.name}</a></li>
+    <li><a href="#${link.path}" class="nav-link hover:text-orange-500 transition-colors" data-path="${link.path}">${link.name}</a></li>
   `).join('');
   footerLinks.innerHTML = footerLinksHtml;
 
@@ -2025,14 +2025,19 @@ function init() {
   renderRoute(getRoutePath());
 
   // Hide Loading Screen
-  setTimeout(() => {
+  const hideLoader = () => {
     const loader = document.getElementById('loading-screen');
     if (loader) {
       loader.classList.add('opacity-0', 'pointer-events-none');
       appContent.classList.remove('opacity-0');
       setTimeout(() => loader.remove(), 700);
     }
-  }, 1500);
+  };
+
+  setTimeout(hideLoader, 1500);
+
+  // Fallback to hide loader if it gets stuck
+  setTimeout(hideLoader, 5000);
 
   document.addEventListener('click', (e) => {
     const target = e.target as HTMLElement;
@@ -2060,7 +2065,7 @@ function getRoutePath() {
 
 function renderMobileMenu() {
   const mobileLinksHtml = NAV_LINKS.map(link => `
-    <a href="${link.path}" class="nav-link text-lg font-medium text-[#0a0a0a] dark:text-white" data-path="${link.path}">
+    <a href="#${link.path}" class="nav-link text-lg font-medium text-[#0a0a0a] dark:text-white" data-path="${link.path}">
       ${link.name}
     </a>
   `).join('');
