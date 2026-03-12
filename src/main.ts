@@ -1,6 +1,6 @@
 import './index.css';
 import * as THREE from 'three';
-import { auth } from './firebase';
+import { auth, db } from './firebase';
 import { 
   onAuthStateChanged, 
   signInWithEmailAndPassword, 
@@ -13,6 +13,69 @@ import {
   sendPasswordResetEmail,
   User
 } from 'firebase/auth';
+import {
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  onSnapshot,
+  getDocFromServer,
+  addDoc,
+  collection,
+  serverTimestamp
+} from 'firebase/firestore';
+
+// --- Firestore Error Handling ---
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth?.currentUser?.uid,
+      email: auth?.currentUser?.email,
+      emailVerified: auth?.currentUser?.emailVerified,
+      isAnonymous: auth?.currentUser?.isAnonymous,
+      tenantId: auth?.currentUser?.tenantId,
+      providerInfo: auth?.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 // --- Toast Utility ---
 type ToastType = 'success' | 'error' | 'info';
@@ -64,6 +127,8 @@ function getFirebaseErrorMessage(error: any): string {
       return 'Network error. Please check your connection.';
     case 'auth/internal-error':
       return 'An internal error occurred. Please try again later.';
+    case 'auth/operation-not-allowed':
+      return 'This sign-in method is not enabled. Please enable Email/Password in the Firebase Console.';
     default:
       return error.message || 'An unexpected error occurred.';
   }
@@ -73,12 +138,13 @@ function getFirebaseErrorMessage(error: any): string {
 type Theme = 'light' | 'dark';
 
 const NAV_LINKS = [
-  { name: 'Home', path: '/' },
-  { name: 'About', path: '/about' },
-  { name: 'Articles', path: '/articles' },
-  { name: 'Media Library', path: '/media' },
-  { name: 'Contact', path: '/contact' },
-  { name: 'Dashboard', path: '/dashboard' },
+  { name: 'Home', path: '#/' },
+  { name: 'About', path: '#/about' },
+  { name: 'Articles', path: '#/articles' },
+  { name: 'Media Library', path: '#/media' },
+  { name: 'Contact', path: '#/contact' },
+  { name: 'Dashboard', path: '#/dashboard' },
+  { name: 'Donate', path: '#/donate' },
 ];
 
 const ANIMATIONS = [
@@ -88,10 +154,10 @@ const ANIMATIONS = [
 ];
 
 const VIDEOS = [
-  { id: 1, title: 'Miracles of the Quran', views: '12K views', time: '2 days ago', image: 'https://picsum.photos/seed/quran/400/225' },
-  { id: 2, title: 'Life of the Prophet (SAW)', views: '45K views', time: '1 week ago', image: 'https://picsum.photos/seed/seerah/400/225' },
-  { id: 3, title: 'The Power of Istighfar', views: '8K views', time: '3 days ago', image: 'https://picsum.photos/seed/dua/400/225' },
-  { id: 4, title: 'Signs of the Day of Judgment', views: '102K views', time: '1 month ago', image: 'https://picsum.photos/seed/signs/400/225' },
+  { id: 1, title: 'Miracles of the Quran', views: '12K views', time: '2 days ago', image: 'https://picsum.photos/seed/quran/400/225', category: 'Lectures' },
+  { id: 2, title: 'Life of the Prophet (SAW)', views: '45K views', time: '1 week ago', image: 'https://picsum.photos/seed/seerah/400/225', category: 'Animations' },
+  { id: 3, title: 'The Power of Istighfar', views: '8K views', time: '3 days ago', image: 'https://picsum.photos/seed/dua/400/225', category: 'Lectures' },
+  { id: 4, title: 'Signs of the Day of Judgment', views: '102K views', time: '1 month ago', image: 'https://picsum.photos/seed/signs/400/225', category: 'Animations' },
 ];
 
 const ARTICLES = [
@@ -123,17 +189,26 @@ const currentYearSpan = document.getElementById('current-year')!;
 // --- Theme Logic ---
 function applyTheme(theme: Theme) {
   const root = document.documentElement;
+  
+  // Add a class to enable transitions only during the theme change
+  root.classList.add('theme-transitioning');
+  
   root.classList.remove('light', 'dark');
   root.classList.add(theme);
   localStorage.setItem('theme', theme);
   currentTheme = theme;
   updateThemeIcons();
+  
+  // Remove the transition class after a short delay
+  setTimeout(() => {
+    root.classList.remove('theme-transitioning');
+  }, 300);
 }
 
 function updateThemeIcons() {
   const icon = currentTheme === 'light' ? 
-    `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>` : 
-    `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>`;
+    `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rotate-0 transition-transform duration-500"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>` : 
+    `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rotate-[360deg] transition-transform duration-500"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>`;
   
   themeToggleBtn.innerHTML = icon;
   themeToggleMobileBtn.innerHTML = icon;
@@ -304,7 +379,7 @@ const templates = {
             <h2 class="text-3xl font-bold mb-2 text-brand-black dark:text-white">Featured Animations</h2>
             <p class="text-gray-600 dark:text-gray-400">Creative storytelling for all ages.</p>
           </div>
-          <a href="/media" class="nav-link text-orange-500 flex items-center gap-2 hover:gap-3 transition-all" data-path="/media">
+          <a href="#/media" class="nav-link text-orange-500 flex items-center gap-2 hover:gap-3 transition-all" data-path="/media">
             View All →
           </a>
         </div>
@@ -391,7 +466,7 @@ const templates = {
       <div class="max-w-7xl mx-auto">
         <div class="flex flex-col md:flex-row justify-between items-center mb-16 gap-4">
           <h2 class="text-4xl font-bold text-brand-black dark:text-white">Islamic Articles</h2>
-          <a href="/articles" class="nav-link btn-secondary" data-path="/articles">Read All Articles</a>
+          <a href="#/articles" class="nav-link btn-secondary" data-path="/articles">Read All Articles</a>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
           ${ARTICLES.map(art => `
@@ -418,7 +493,7 @@ const templates = {
             "Join our mission of spreading beneficial Islamic knowledge. Subscribe to our YouTube channel and follow us on TikTok."
           </p>
           <div class="flex flex-wrap justify-center gap-6">
-            <a href="/dashboard" class="nav-link btn-primary px-10" data-path="/dashboard">Go to Dashboard</a>
+            <a href="#/dashboard" class="nav-link btn-primary px-10" data-path="/dashboard">Go to Dashboard</a>
             <a href="https://youtube.com/@beaconofislam" target="_blank" rel="noopener noreferrer" class="btn-red px-10">
               <span class="bell-bounce">🔔</span> Subscribe on YouTube
             </a>
@@ -449,23 +524,67 @@ const templates = {
     </div>
   `,
   media: `
-    <div class="pt-32 pb-24 px-6">
-      <div class="max-w-7xl mx-auto">
-        <h1 class="text-4xl font-bold mb-12 text-brand-black dark:text-white">Media Library</h1>
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+    <div class="pt-32 pb-24 px-6 relative overflow-hidden">
+      <div class="absolute inset-0 islamic-pattern pointer-events-none opacity-10"></div>
+      <div class="max-w-7xl mx-auto relative z-10">
+        <div class="flex flex-col md:flex-row items-center justify-between gap-8 mb-12">
+          <div>
+            <h1 class="text-4xl font-bold mb-2 text-brand-black dark:text-white">Media Library</h1>
+            <p class="text-gray-500">Explore our collection of Islamic animations and educational videos.</p>
+          </div>
+          <div class="flex items-center gap-4">
+            <div class="relative hidden sm:block">
+              <input type="text" id="media-search" placeholder="Search videos..." class="bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-full py-2 pl-10 pr-4 text-sm focus:border-orange-500 outline-none transition-all" />
+              <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">🔍</span>
+            </div>
+            <button class="filter-btn px-6 py-2 rounded-full bg-orange-500 text-white font-bold text-sm shadow-lg shadow-orange-500/20" data-category="All">All Videos</button>
+            <button class="filter-btn px-6 py-2 rounded-full bg-black/5 dark:bg-white/5 text-gray-500 font-bold text-sm hover:bg-black/10 dark:hover:bg-white/10 transition-colors" data-category="Animations">Animations</button>
+            <button class="filter-btn px-6 py-2 rounded-full bg-black/5 dark:bg-white/5 text-gray-500 font-bold text-sm hover:bg-black/10 dark:hover:bg-white/10 transition-colors" data-category="Lectures">Lectures</button>
+          </div>
+        </div>
+
+        <div id="media-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
           ${VIDEOS.map(vid => `
-            <div class="glass-card overflow-hidden relative group">
+            <div class="glass-card overflow-hidden group cursor-pointer video-card" data-video-id="${vid.id}">
               <div class="relative aspect-video">
-                <img src="${vid.image}" class="w-full h-full object-cover" />
+                <img src="${vid.image}" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
+                <div class="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div class="w-12 h-12 bg-orange-500 rounded-full flex items-center justify-center text-white transform scale-75 group-hover:scale-100 transition-transform">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="m7 4 12 8-12 8V4z"/></svg>
+                  </div>
+                </div>
                 <button data-video-id="${vid.id}" class="save-video-btn absolute top-3 right-3 w-8 h-8 rounded-full bg-black/20 backdrop-blur-md border border-white/10 flex items-center justify-center text-white hover:bg-orange-500 transition-all z-20">
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="bookmark-icon"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
                 </button>
               </div>
-              <div class="p-4">
-                <h4 class="font-bold text-brand-black dark:text-white">${vid.title}</h4>
+              <div class="p-5">
+                <h4 class="font-bold text-brand-black dark:text-white mb-2 line-clamp-1 group-hover:text-orange-500 transition-colors">${vid.title}</h4>
+                <div class="flex justify-between items-center text-xs text-gray-500">
+                  <span class="flex items-center gap-1">👁️ ${vid.views}</span>
+                  <span class="flex items-center gap-1">🕒 ${vid.time}</span>
+                </div>
               </div>
             </div>
           `).join('')}
+        </div>
+      </div>
+    </div>
+
+    <!-- Video Player Modal -->
+    <div id="video-modal" class="hidden fixed inset-0 z-[100] flex items-center justify-center px-6">
+      <div class="absolute inset-0 bg-black/90 backdrop-blur-md" id="video-modal-overlay"></div>
+      <div class="max-w-5xl w-full relative z-10">
+        <button id="close-video-modal" class="absolute -top-12 right-0 text-white hover:text-orange-500 transition-colors flex items-center gap-2 font-bold">
+          Close <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+        <div class="aspect-video bg-black rounded-2xl overflow-hidden shadow-2xl border border-white/10">
+          <div class="w-full h-full flex items-center justify-center text-white flex-col gap-4">
+            <div class="w-20 h-20 bg-orange-500 rounded-full flex items-center justify-center animate-pulse">
+              <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="currentColor"><path d="m7 4 12 8-12 8V4z"/></svg>
+            </div>
+            <p class="text-xl font-bold" id="video-modal-title">Video Title</p>
+            <p class="text-gray-400">Streaming from Beacon of Islam Media Server...</p>
+          </div>
         </div>
       </div>
     </div>
@@ -763,7 +882,7 @@ const templates = {
                 <input type="checkbox" class="w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500" />
                 <span class="text-gray-500 group-hover:text-brand-black dark:group-hover:text-white transition-colors">Remember me</span>
               </label>
-              <a href="/forgot-password" class="nav-link text-orange-500 font-semibold hover:underline" data-path="/forgot-password">Forgot password?</a>
+              <a href="#/forgot-password" class="nav-link text-orange-500 font-semibold hover:underline" data-path="/forgot-password">Forgot password?</a>
             </div>
 
             <button type="submit" class="btn-primary w-full justify-center py-4 text-lg shadow-orange-500/40">
@@ -787,7 +906,7 @@ const templates = {
 
           <p class="mt-10 text-center text-sm text-gray-500">
             Don't have an account? 
-            <a href="/signup" class="nav-link text-orange-500 font-bold hover:underline" data-path="/signup">Create account</a>
+            <a href="#/signup" class="nav-link text-orange-500 font-bold hover:underline" data-path="/signup">Create account</a>
           </p>
         </div>
       </div>
@@ -836,7 +955,7 @@ const templates = {
 
             <div class="flex items-start gap-2 text-sm">
               <input type="checkbox" required class="mt-1 w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500" />
-              <span class="text-gray-500">I agree to the <a href="/terms" class="nav-link text-orange-500 font-bold" data-path="/terms">Terms of Service</a> and <a href="/privacy" class="nav-link text-orange-500 font-bold" data-path="/privacy">Privacy Policy</a></span>
+              <span class="text-gray-500">I agree to the <a href="#/terms" class="nav-link text-orange-500 font-bold" data-path="/terms">Terms of Service</a> and <a href="#/privacy" class="nav-link text-orange-500 font-bold" data-path="/privacy">Privacy Policy</a></span>
             </div>
 
             <button type="submit" class="btn-primary w-full justify-center py-4 text-lg shadow-orange-500/40">
@@ -1001,11 +1120,94 @@ const templates = {
       </div>
     </div>
   `,
+  donate: `
+    <div class="pt-32 pb-24 px-6 relative overflow-hidden">
+      <div class="absolute inset-0 islamic-pattern pointer-events-none opacity-10"></div>
+      <div class="max-w-4xl mx-auto relative z-10">
+        <div class="text-center mb-16">
+          <h1 class="text-5xl font-bold mb-6 text-brand-black dark:text-white">Charity & Zakat</h1>
+          <p class="text-xl text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
+            "The example of those who spend their wealth in the way of Allah is like a seed [of grain] which grows seven spikes; in each spike is a hundred grains." (Quran 2:261)
+          </p>
+        </div>
+
+        <div class="max-w-2xl mx-auto bg-emerald-50 dark:bg-emerald-900/10 p-8 rounded-3xl border border-emerald-100 dark:border-emerald-900/30 mb-16">
+          <div class="flex items-center gap-4 mb-6">
+            <div class="w-12 h-12 bg-emerald-500 rounded-xl flex items-center justify-center text-white text-2xl">🧮</div>
+            <div>
+              <h2 class="text-2xl font-bold text-brand-black dark:text-white">Zakat Calculator</h2>
+              <p class="text-sm text-gray-500">Calculate your mandatory 2.5% Zakat based on your total wealth.</p>
+            </div>
+          </div>
+          <div class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Total Wealth / Assets</label>
+              <div class="relative">
+                <span class="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400">$</span>
+                <input type="number" id="zakat-wealth-input" class="w-full pl-8 pr-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-brand-black dark:text-white focus:ring-2 focus:ring-emerald-500 outline-none transition-all" placeholder="Enter total wealth">
+              </div>
+            </div>
+            <div id="zakat-result-container" class="hidden p-4 bg-white dark:bg-gray-800 rounded-xl border border-emerald-200 dark:border-emerald-800 flex justify-between items-center">
+              <div>
+                <p class="text-xs text-gray-500 uppercase tracking-wider font-bold">Calculated Zakat (2.5%)</p>
+                <p class="text-3xl font-bold text-emerald-600 dark:text-emerald-400">$<span id="zakat-amount-display">0.00</span></p>
+              </div>
+              <button id="use-zakat-btn" class="px-6 py-2 bg-emerald-500 text-white rounded-lg font-bold hover:bg-emerald-600 transition-colors text-sm">Use this amount</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-8 mb-16">
+          <div class="bg-white dark:bg-gray-800 p-8 rounded-3xl shadow-xl border border-gray-100 dark:border-gray-700 text-center transform hover:-translate-y-2 transition-all duration-300">
+            <div class="w-16 h-16 bg-orange-100 dark:bg-orange-900/30 rounded-2xl flex items-center justify-center mx-auto mb-6 text-3xl">🌙</div>
+            <h3 class="text-xl font-bold mb-3 text-brand-black dark:text-white">Zakat</h3>
+            <p class="text-gray-500 text-sm mb-6">Purify your wealth by giving 2.5% to those in need. A mandatory pillar of Islam.</p>
+            <button class="donate-btn w-full py-3 bg-orange-500 text-white rounded-xl font-bold hover:bg-orange-600 transition-colors" data-category="Zakat">Donate Zakat</button>
+          </div>
+          <div class="bg-white dark:bg-gray-800 p-8 rounded-3xl shadow-xl border border-gray-100 dark:border-gray-700 text-center transform hover:-translate-y-2 transition-all duration-300">
+            <div class="w-16 h-16 bg-emerald-100 dark:bg-emerald-900/30 rounded-2xl flex items-center justify-center mx-auto mb-6 text-3xl">🤝</div>
+            <h3 class="text-xl font-bold mb-3 text-brand-black dark:text-white">Sadaqah</h3>
+            <p class="text-gray-500 text-sm mb-6">Voluntary charity that brings blessings and removes hardships. Give any amount.</p>
+            <button class="donate-btn w-full py-3 bg-emerald-500 text-white rounded-xl font-bold hover:bg-emerald-600 transition-colors" data-category="Sadaqah">Give Sadaqah</button>
+          </div>
+          <div class="bg-white dark:bg-gray-800 p-8 rounded-3xl shadow-xl border border-gray-100 dark:border-gray-700 text-center transform hover:-translate-y-2 transition-all duration-300">
+            <div class="w-16 h-16 bg-blue-100 dark:bg-blue-900/30 rounded-2xl flex items-center justify-center mx-auto mb-6 text-3xl">🌍</div>
+            <h3 class="text-xl font-bold mb-3 text-brand-black dark:text-white">Emergency Relief</h3>
+            <p class="text-gray-500 text-sm mb-6">Provide immediate food, water, and medical aid to those affected by disasters.</p>
+            <button class="donate-btn w-full py-3 bg-blue-500 text-white rounded-xl font-bold hover:bg-blue-600 transition-colors" data-category="Emergency Relief">Help Now</button>
+          </div>
+        </div>
+
+        <div id="donation-form-container" class="hidden max-w-md mx-auto bg-white dark:bg-gray-800 p-8 rounded-3xl shadow-2xl border border-gray-100 dark:border-gray-700">
+          <h2 class="text-2xl font-bold mb-6 text-brand-black dark:text-white text-center">Complete Donation</h2>
+          <form id="donation-form" class="space-y-6">
+            <input type="hidden" id="donation-category" value="">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Amount (USD)</label>
+              <div class="relative">
+                <span class="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400">$</span>
+                <input type="number" id="donation-amount" required min="1" step="0.01" class="w-full pl-8 pr-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-brand-black dark:text-white focus:ring-2 focus:ring-orange-500 outline-none transition-all" placeholder="0.00">
+              </div>
+            </div>
+            <div class="grid grid-cols-3 gap-3">
+              <button type="button" class="amount-preset py-2 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors" data-amount="10">$10</button>
+              <button type="button" class="amount-preset py-2 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors" data-amount="50">$50</button>
+              <button type="button" class="amount-preset py-2 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors" data-amount="100">$100</button>
+            </div>
+            <button type="submit" class="w-full py-4 bg-orange-500 text-white rounded-xl font-bold hover:bg-orange-600 shadow-lg shadow-orange-500/30 transition-all transform hover:scale-[1.02] active:scale-[0.98]">
+              Confirm Donation
+            </button>
+            <p class="text-xs text-center text-gray-500">This is a secure pledge. You will be contacted for payment details.</p>
+          </form>
+        </div>
+      </div>
+    </div>
+  `,
   notFound: `
     <div class="pt-32 pb-24 px-6 text-center">
       <h1 class="text-6xl font-bold mb-4 text-brand-black dark:text-white">404</h1>
       <p class="text-xl text-gray-500 mb-8">Page not found</p>
-      <a href="/" class="nav-link btn-primary inline-flex" data-path="/">Go Home</a>
+      <a href="#/" class="nav-link btn-primary inline-flex" data-path="/">Go Home</a>
     </div>
   `
 };
@@ -1030,26 +1232,25 @@ function renderRoute(path: string) {
       appContent.innerHTML = templates.articles;
     } else if (path === '/media') {
       appContent.innerHTML = templates.media;
-      initSaveButtons();
+      initMediaPage();
     } else if (path === '/contact') {
       appContent.innerHTML = templates.contact;
     } else if (path === '/dashboard') {
       appContent.innerHTML = templates.dashboard;
       initTiltCards();
       updateDashboardUI();
+    } else if (path === '/donate') {
+      appContent.innerHTML = templates.donate;
+      initDonatePage();
     } else if (path === '/login') {
       if (currentUser) {
-        window.history.pushState({}, '', '/dashboard');
-        renderRoute('/dashboard');
-        return;
+        window.location.hash = '#/dashboard';
       }
       appContent.innerHTML = templates.login;
       initAuthForms();
     } else if (path === '/signup') {
       if (currentUser) {
-        window.history.pushState({}, '', '/dashboard');
-        renderRoute('/dashboard');
-        return;
+        window.location.hash = '#/dashboard';
       }
       appContent.innerHTML = templates.signup;
       initAuthForms();
@@ -1113,8 +1314,7 @@ function updateDashboardUI() {
         try {
           await signOut(auth);
           showToast('Logged out successfully', 'info');
-          window.history.pushState({}, '', '/login');
-          renderRoute('/login');
+          window.location.hash = '#/login';
         } catch (error) {
           console.error('Logout error:', error);
         }
@@ -1164,9 +1364,8 @@ function updateDashboardUI() {
     renderSavedVideos();
   } else {
     // Redirect to login if not authenticated and trying to access dashboard
-    if (window.location.pathname === '/dashboard') {
-      window.history.pushState({}, '', '/login');
-      renderRoute('/login');
+    if (getRoutePath() === '/dashboard') {
+      window.location.hash = '#/login';
     }
   }
 }
@@ -1223,8 +1422,7 @@ function initSaveButtons() {
       e.stopPropagation();
       if (!currentUser) {
         showToast('Please login to save content', 'info');
-        window.history.pushState({}, '', '/login');
-        renderRoute('/login');
+        window.location.hash = '#/login';
         return;
       }
       toggleSaveVideo(videoId);
@@ -1239,14 +1437,14 @@ function initSaveButtons() {
         if (icon) icon.setAttribute('fill', 'none');
       }
 
-      if (window.location.pathname === '/dashboard') {
+      if (getRoutePath() === '/dashboard') {
         renderSavedVideos();
       }
     });
   });
 }
 
-function toggleSaveVideo(videoId: string) {
+async function toggleSaveVideo(videoId: string) {
   const index = savedVideoIds.indexOf(videoId);
   if (index === -1) {
     savedVideoIds.push(videoId);
@@ -1256,6 +1454,224 @@ function toggleSaveVideo(videoId: string) {
     showToast('Removed from dashboard', 'info');
   }
   localStorage.setItem('savedVideos', JSON.stringify(savedVideoIds));
+
+  if (currentUser && db) {
+    try {
+      await updateDoc(doc(db, 'users', currentUser.uid), {
+        savedVideoIds: savedVideoIds
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${currentUser.uid}`);
+    }
+  }
+}
+
+async function ensureUserDocument(user: User) {
+  if (!db) return;
+  const userRef = doc(db, 'users', user.uid);
+  try {
+    const userDoc = await getDoc(userRef);
+    if (!userDoc.exists()) {
+      await setDoc(userRef, {
+        uid: user.uid,
+        email: user.email,
+        displayName: user.displayName,
+        photoURL: user.photoURL,
+        savedVideoIds: savedVideoIds // Sync current local saves to new account
+      });
+    } else {
+      // Merge local saves with cloud saves if needed, or just prefer cloud
+      const cloudSaves = userDoc.data().savedVideoIds || [];
+      const mergedSaves = Array.from(new Set([...savedVideoIds, ...cloudSaves]));
+      savedVideoIds = mergedSaves;
+      localStorage.setItem('savedVideos', JSON.stringify(savedVideoIds));
+      if (mergedSaves.length > cloudSaves.length) {
+        await updateDoc(userRef, { savedVideoIds: mergedSaves });
+      }
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
+  }
+}
+
+function initMediaPage() {
+  initSaveButtons();
+  
+  const videoCards = document.querySelectorAll('.video-card');
+  const filterBtns = document.querySelectorAll('.filter-btn');
+  const mediaSearch = document.getElementById('media-search') as HTMLInputElement;
+  const videoModal = document.getElementById('video-modal');
+  const videoModalOverlay = document.getElementById('video-modal-overlay');
+  const closeVideoModal = document.getElementById('close-video-modal');
+  const videoModalTitle = document.getElementById('video-modal-title');
+
+  const filterVideos = () => {
+    const category = document.querySelector('.filter-btn.bg-orange-500')?.getAttribute('data-category') || 'All';
+    const query = mediaSearch?.value.toLowerCase() || '';
+
+    videoCards.forEach(card => {
+      const videoId = parseInt(card.getAttribute('data-video-id') || '0');
+      const video = VIDEOS.find(v => v.id === videoId);
+      if (!video) return;
+
+      const matchesCategory = category === 'All' || video.category === category;
+      const matchesSearch = video.title.toLowerCase().includes(query);
+
+      if (matchesCategory && matchesSearch) {
+        (card as HTMLElement).style.display = 'block';
+      } else {
+        (card as HTMLElement).style.display = 'none';
+      }
+    });
+  };
+
+  // Filtering Logic
+  filterBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      // Update button styles
+      filterBtns.forEach(b => {
+        b.classList.remove('bg-orange-500', 'text-white', 'shadow-lg', 'shadow-orange-500/20');
+        b.classList.add('bg-black/5', 'dark:bg-white/5', 'text-gray-500');
+      });
+      btn.classList.add('bg-orange-500', 'text-white', 'shadow-lg', 'shadow-orange-500/20');
+      btn.classList.remove('bg-black/5', 'dark:bg-white/5', 'text-gray-500');
+
+      filterVideos();
+    });
+  });
+
+  // Search Logic
+  if (mediaSearch) {
+    mediaSearch.addEventListener('input', filterVideos);
+  }
+
+  const openModal = (vid: any) => {
+    if (videoModal && videoModalTitle) {
+      videoModalTitle.textContent = vid.title;
+      videoModal.classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+    }
+  };
+
+  const closeModal = () => {
+    if (videoModal) {
+      videoModal.classList.add('hidden');
+      document.body.style.overflow = '';
+    }
+  };
+
+  videoCards.forEach(card => {
+    card.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('.save-video-btn')) return;
+
+      const videoId = parseInt(card.getAttribute('data-video-id') || '0');
+      const video = VIDEOS.find(v => v.id === videoId);
+      if (video) {
+        openModal(video);
+      }
+    });
+  });
+
+  if (videoModalOverlay) videoModalOverlay.addEventListener('click', closeModal);
+  if (closeVideoModal) closeVideoModal.addEventListener('click', closeModal);
+}
+
+function initDonatePage() {
+  const donateBtns = document.querySelectorAll('.donate-btn');
+  const formContainer = document.getElementById('donation-form-container');
+  const donationForm = document.getElementById('donation-form') as HTMLFormElement;
+  const categoryInput = document.getElementById('donation-category') as HTMLInputElement;
+  const amountInput = document.getElementById('donation-amount') as HTMLInputElement;
+  const presetBtns = document.querySelectorAll('.amount-preset');
+
+  // Zakat Calculator Logic
+  const wealthInput = document.getElementById('zakat-wealth-input') as HTMLInputElement;
+  const resultContainer = document.getElementById('zakat-result-container');
+  const amountDisplay = document.getElementById('zakat-amount-display');
+  const useZakatBtn = document.getElementById('use-zakat-btn');
+
+  if (wealthInput) {
+    wealthInput.addEventListener('input', () => {
+      const wealth = parseFloat(wealthInput.value);
+      if (!isNaN(wealth) && wealth > 0) {
+        const zakat = wealth * 0.025;
+        if (amountDisplay) amountDisplay.textContent = zakat.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        resultContainer?.classList.remove('hidden');
+      } else {
+        resultContainer?.classList.add('hidden');
+      }
+    });
+  }
+
+  if (useZakatBtn) {
+    useZakatBtn.addEventListener('click', () => {
+      const wealth = parseFloat(wealthInput.value);
+      if (!isNaN(wealth) && wealth > 0) {
+        const zakat = (wealth * 0.025).toFixed(2);
+        amountInput.value = zakat;
+        categoryInput.value = 'Zakat';
+        formContainer?.classList.remove('hidden');
+        formContainer?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
+  }
+
+  donateBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const category = btn.getAttribute('data-category') || '';
+      categoryInput.value = category;
+      formContainer?.classList.remove('hidden');
+      formContainer?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  });
+
+  presetBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const amount = btn.getAttribute('data-amount') || '';
+      amountInput.value = amount;
+    });
+  });
+
+  if (donationForm) {
+    donationForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!currentUser) {
+        showToast('Please login to make a donation pledge', 'info');
+        window.location.hash = '#/login';
+        return;
+      }
+
+      const amount = parseFloat(amountInput.value);
+      const category = categoryInput.value;
+
+      const submitBtn = donationForm.querySelector('button[type="submit"]') as HTMLButtonElement;
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<span class="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span> Processing...';
+
+      try {
+        if (!db) throw new Error('Database not initialized');
+        
+        await addDoc(collection(db, 'donations'), {
+          uid: currentUser.uid,
+          amount: amount,
+          category: category,
+          timestamp: serverTimestamp(),
+          status: 'pending'
+        });
+
+        showToast(`JazakAllah Khair! Your ${category} pledge of $${amount} has been recorded.`, 'success');
+        donationForm.reset();
+        formContainer?.classList.add('hidden');
+      } catch (error) {
+        console.error('Donation error:', error);
+        showToast('Failed to record donation. Please try again.', 'error');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = 'Confirm Donation';
+      }
+    });
+  }
 }
 
 function initAuthForms() {
@@ -1302,8 +1718,7 @@ function initAuthForms() {
       try {
         await signInWithEmailAndPassword(auth, email, password);
         showToast('Welcome back!', 'success');
-        window.history.pushState({}, '', '/dashboard');
-        renderRoute('/dashboard');
+        window.location.hash = '#/dashboard';
       } catch (error: any) {
         showToast(getFirebaseErrorMessage(error), 'error');
         submitBtn.disabled = false;
@@ -1330,9 +1745,9 @@ function initAuthForms() {
       try {
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
         await updateProfile(userCredential.user, { displayName: name });
+        await ensureUserDocument(userCredential.user);
         showToast('Account created successfully!', 'success');
-        window.history.pushState({}, '', '/dashboard');
-        renderRoute('/dashboard');
+        window.location.hash = '#/dashboard';
       } catch (error: any) {
         showToast(getFirebaseErrorMessage(error), 'error');
         submitBtn.disabled = false;
@@ -1357,8 +1772,7 @@ function initAuthForms() {
       try {
         await sendPasswordResetEmail(auth, email);
         showToast('Password reset email sent! Please check your inbox.', 'success');
-        window.history.pushState({}, '', '/login');
-        renderRoute('/login');
+        window.location.hash = '#/login';
       } catch (error: any) {
         showToast(getFirebaseErrorMessage(error), 'error');
         submitBtn.disabled = false;
@@ -1374,10 +1788,10 @@ function initAuthForms() {
     }
     const provider = new GoogleAuthProvider();
     try {
-      await signInWithPopup(auth, provider);
+      const result = await signInWithPopup(auth, provider);
+      await ensureUserDocument(result.user);
       showToast('Signed in with Google!', 'success');
-      window.history.pushState({}, '', '/dashboard');
-      renderRoute('/dashboard');
+      window.location.hash = '#/dashboard';
     } catch (error: any) {
       showToast(getFirebaseErrorMessage(error), 'error');
     }
@@ -1393,10 +1807,10 @@ function initAuthForms() {
     }
     const provider = new FacebookAuthProvider();
     try {
-      await signInWithPopup(auth, provider);
+      const result = await signInWithPopup(auth, provider);
+      await ensureUserDocument(result.user);
       showToast('Signed in with Facebook!', 'success');
-      window.history.pushState({}, '', '/dashboard');
-      renderRoute('/dashboard');
+      window.location.hash = '#/dashboard';
     } catch (error: any) {
       showToast(getFirebaseErrorMessage(error), 'error');
     }
@@ -1407,8 +1821,9 @@ function initAuthForms() {
 }
 
 function handleSearchPage() {
-  const urlParams = new URLSearchParams(window.location.search);
-  const query = urlParams.get('q') || '';
+  const hash = window.location.hash;
+  const queryMatch = hash.match(/q=([^&]*)/);
+  const query = queryMatch ? decodeURIComponent(queryMatch[1]) : '';
   const queryText = document.getElementById('query-text');
   const resultsContainer = document.getElementById('search-results-container');
   const noResults = document.getElementById('no-results');
@@ -1531,8 +1946,7 @@ function initSearch() {
     if (e.key === 'Enter') {
       const query = (e.target as HTMLInputElement).value;
       if (query.trim()) {
-        window.history.pushState({}, '', `/search?q=${encodeURIComponent(query)}`);
-        renderRoute(`/search?q=${encodeURIComponent(query)}`);
+        window.location.hash = `#/search?q=${encodeURIComponent(query)}`;
         if (searchInputMobile) searchInputMobile.value = '';
         if (searchInput) searchInput.value = '';
       }
@@ -1544,14 +1958,44 @@ function initSearch() {
 }
 
 // --- Initialization ---
+async function testConnection() {
+  if (!db) return;
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if(error instanceof Error && error.message.includes('the client is offline')) {
+      console.error("Please check your Firebase configuration. ");
+    }
+  }
+}
+
 function init() {
+  testConnection();
   // Listen for auth state changes
   if (auth) {
-    onAuthStateChanged(auth, (user) => {
+    onAuthStateChanged(auth, async (user) => {
       currentUser = user;
+      if (user && db) {
+        // Sync saved videos from Firestore
+        const userRef = doc(db, 'users', user.uid);
+        onSnapshot(userRef, (doc) => {
+          if (doc.exists()) {
+            const data = doc.data();
+            if (data.savedVideoIds) {
+              savedVideoIds = data.savedVideoIds;
+              localStorage.setItem('savedVideos', JSON.stringify(savedVideoIds));
+              if (getRoutePath() === '/dashboard') {
+                renderSavedVideos();
+              }
+            }
+          }
+        }, (error) => {
+          handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
+        });
+      }
       updateAuthSection();
       renderMobileMenu();
-      if (window.location.pathname === '/dashboard') {
+      if (getRoutePath() === '/dashboard') {
         updateDashboardUI();
       }
     });
@@ -1568,7 +2012,7 @@ function init() {
 
   renderMobileMenu();
 
-  const footerLinksHtml = NAV_LINKS.slice(0, 4).map(link => `
+  const footerLinksHtml = NAV_LINKS.map(link => `
     <li><a href="${link.path}" class="nav-link hover:text-orange-500 transition-colors" data-path="${link.path}">${link.name}</a></li>
   `).join('');
   footerLinks.innerHTML = footerLinksHtml;
@@ -1578,7 +2022,7 @@ function init() {
   currentYearSpan.textContent = new Date().getFullYear().toString();
   applyTheme(currentTheme);
   initSearch();
-  renderRoute(window.location.pathname);
+  renderRoute(getRoutePath());
 
   // Hide Loading Screen
   setTimeout(() => {
@@ -1595,17 +2039,23 @@ function init() {
     const link = target.closest('.nav-link');
     if (link) {
       const path = link.getAttribute('href');
-      if (path && path.startsWith('/')) {
+      if (path && (path.startsWith('/') || path.startsWith('#/'))) {
         e.preventDefault();
-        window.history.pushState({}, '', path);
-        renderRoute(path);
+        const routePath = path.startsWith('#') ? path : '#' + path;
+        window.location.hash = routePath;
       }
     }
   });
 
-  window.addEventListener('popstate', () => {
-    renderRoute(window.location.pathname);
+  window.addEventListener('hashchange', () => {
+    renderRoute(getRoutePath());
   });
+}
+
+function getRoutePath() {
+  const hash = window.location.hash;
+  if (!hash || hash === '#/') return '/';
+  return hash.slice(hash.startsWith('#') ? 1 : 0);
 }
 
 function renderMobileMenu() {
@@ -1619,15 +2069,15 @@ function renderMobileMenu() {
   if (currentUser) {
     mobileAuthHtml = `
       <div class="pt-6 mt-6 border-t border-black/10 dark:border-white/10 flex flex-col gap-4">
-        <a href="/dashboard" class="nav-link text-center py-3 text-lg font-bold text-orange-500" data-path="/dashboard">Dashboard</a>
+        <a href="#/dashboard" class="nav-link text-center py-3 text-lg font-bold text-orange-500" data-path="/dashboard">Dashboard</a>
         <button id="mobile-logout-btn" class="text-center py-3 text-lg font-bold text-red-500">Logout</button>
       </div>
     `;
   } else {
     mobileAuthHtml = `
       <div class="pt-6 mt-6 border-t border-black/10 dark:border-white/10 flex flex-col gap-4">
-        <a href="/login" class="nav-link text-center py-3 text-lg font-bold text-gray-600 dark:text-gray-300" data-path="/login">Sign In</a>
-        <a href="/signup" class="nav-link btn-primary text-center py-4 text-lg" data-path="/signup">Sign Up</a>
+        <a href="#/login" class="nav-link text-center py-3 text-lg font-bold text-gray-600 dark:text-gray-300" data-path="/login">Sign In</a>
+        <a href="#/signup" class="nav-link btn-primary text-center py-4 text-lg" data-path="/signup">Sign Up</a>
       </div>
     `;
   }
@@ -1640,8 +2090,7 @@ function renderMobileMenu() {
       mobileLogoutBtn.addEventListener('click', async () => {
         try {
           await signOut(auth);
-          window.history.pushState({}, '', '/login');
-          renderRoute('/login');
+          window.location.hash = '#/login';
         } catch (error) {
           console.error('Logout error:', error);
         }
@@ -1654,7 +2103,7 @@ function updateAuthSection() {
   if (currentUser) {
     authSection.innerHTML = `
       <div class="flex items-center gap-4">
-        <a href="/dashboard" class="nav-link flex items-center gap-2 group" data-path="/dashboard">
+        <a href="#/dashboard" class="nav-link flex items-center gap-2 group" data-path="/dashboard">
           <img src="${currentUser.photoURL || 'https://picsum.photos/seed/user/100/100'}" class="w-8 h-8 rounded-full border border-white/10" />
           <span class="text-sm font-medium text-gray-600 dark:text-gray-300 group-hover:text-orange-500 transition-colors">${currentUser.displayName || 'Profile'}</span>
         </a>
@@ -1663,8 +2112,8 @@ function updateAuthSection() {
   } else {
     authSection.innerHTML = `
       <div class="flex items-center gap-3">
-        <a href="/login" class="nav-link text-sm font-bold text-gray-600 dark:text-gray-300 hover:text-orange-500 transition-colors" data-path="/login">Sign In</a>
-        <a href="/signup" class="nav-link btn-primary py-2 px-6 text-sm" data-path="/signup">Sign Up</a>
+        <a href="#/login" class="nav-link text-sm font-bold text-gray-600 dark:text-gray-300 hover:text-orange-500 transition-colors" data-path="/login">Sign In</a>
+        <a href="#/signup" class="nav-link btn-primary py-2 px-6 text-sm" data-path="/signup">Sign Up</a>
       </div>
     `;
   }

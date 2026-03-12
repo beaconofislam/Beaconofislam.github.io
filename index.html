@@ -1,15 +1,22 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Beacon of Islam</title>
+    <script>
+      (function() {
+        const theme = localStorage.getItem('theme') || 
+          (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.classList.add(theme);
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,700;1,700&display=swap" rel="stylesheet">
   </head>
-  <body class="bg-white dark:bg-[#0a0a0a] text-[#0a0a0a] dark:text-white antialiased selection:bg-orange-500/30 transition-colors duration-300">
+  <body class="bg-white dark:bg-[#0a0a0a] text-[#0a0a0a] dark:text-white antialiased selection:bg-orange-500/30">
     
     <!-- Loading Screen -->
     <div id="loading-screen" class="fixed inset-0 z-[100] bg-white dark:bg-[#0a0a0a] flex flex-col items-center justify-center transition-opacity duration-700">

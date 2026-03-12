@@ -1,0 +1,76 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required)
+    //   - displayName: string (optional)
+    //   - photoURL: string (optional)
+    //   - savedVideoIds: list (optional)
+    //
+    // Collection: donations
+    // Document ID: {donationId}
+    // Fields:
+    //   - uid: string (required)
+    //   - amount: number (required)
+    //   - category: string (required)
+    //   - timestamp: timestamp (required)
+    //   - status: string (optional)
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "chineseboydrama@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email']) &&
+             data.uid is string &&
+             data.email is string &&
+             (!('displayName' in data) || data.displayName is string) &&
+             (!('photoURL' in data) || data.photoURL is string) &&
+             (!('savedVideoIds' in data) || data.savedVideoIds is list);
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && 
+                    request.resource.data.uid == resource.data.uid;
+      allow delete: if isOwner(userId);
+    }
+
+    match /donations/{donationId} {
+      function isValidDonation(data) {
+        return data.keys().hasAll(['uid', 'amount', 'category', 'timestamp']) &&
+               data.uid is string &&
+               data.amount is number && data.amount > 0 &&
+               data.category in ['Zakat', 'Sadaqah', 'Emergency Relief', 'General'] &&
+               data.timestamp is timestamp &&
+               (!('status' in data) || data.status in ['pending', 'completed', 'failed']);
+      }
+
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.uid || isAdmin());
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.uid && isValidDonation(request.resource.data);
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+  }
+}
